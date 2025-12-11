@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # ----------------------------------------------------
+  # 1. SERVICE DB (PostgreSQL) - Réplica Unique, Backend, Secret
+  # ----------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=tp_db
+      - POSTGRES_USER=user_app
+      # Le mot de passe est lu depuis le fichier du secret
+      - POSTGRES_PASSWORD_FILE=/run/secrets/tp_db_password 
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    secrets:
+      - tp_db_password # Accès au secret pour la configuration de l'image
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - backend
+
+  # ----------------------------------------------------
+  # 2. SERVICE API (Flask/Gunicorn) - Scalé, Mise à Jour Contrôlée, Secret
+  # ----------------------------------------------------
+  api:
+    image: tp-api:secret-v1 # Utilisez le tag de la version finale qui lit le secret
+    environment:
+      - DB_HOST=db
+      - DB_NAME=tp_db
+      - DB_USER=user_app
+      # DB_PASSWORD n'est plus en environnement, il est lu dans le fichier par app.py
+    secrets:
+      - tp_db_password # Accès au secret pour la connexion via l'API
+    deploy:
+      mode: replicated
+      replicas: 3 # Haute Disponibilité et Scaling
+      restart_policy:
+        condition: any
+      update_config: # Stratégie de Rolling Update (Mission 5)
+        parallelism: 1 
+        delay: 5s      
+        failure_action: rollback 
+    networks:
+      - frontend
+      - backend
+
+  # ----------------------------------------------------
+  # 3. SERVICE REVERSE PROXY (NGINX) - HA, Frontend, Ingress
+  # ----------------------------------------------------
+  reverse:
+    image: nginx:stable-alpine
+    ports:
+      - target: 80
+        published: 8080
+        protocol: tcp
+        mode: ingress # Routing Mesh Swarm
+    volumes:
+      - type: bind
+        source: ./reverse/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+      - logs_vol:/var/log/nginx # Volume partagé pour les logs
+    deploy:
+      mode: replicated
+      replicas: 2 # Haute Disponibilité du point d'entrée
+      restart_policy:
+        condition: on-failure
+    networks:
+      - frontend
+
+  # ----------------------------------------------------
+  # 4. SERVICE MONITOR (Analyse des logs) - Volume Partagé
+  # ----------------------------------------------------
+  monitor:
+    image: tp-monitor:latest
+    # L'option -u assure que Python ne met pas la sortie en cache
+    command: python -u log_analyzer.py 
+    volumes:
+      - logs_vol:/app/logs:ro # Lecture seule des logs NGINX
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+# ----------------------------------------------------
+# DÉFINITION DES RÉSEAUX, VOLUMES ET SECRETS
+# ----------------------------------------------------
+networks:
+  frontend:
+    driver: overlay
+    attachable: true
+  backend:
+    driver: overlay
+    internal: true 
+
+volumes:
+  db_data:
+    driver: local 
+  logs_vol:
+    driver: local
+
+secrets:
+  tp_db_password:

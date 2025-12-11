@@ -1,0 +1,13 @@
+# prometheus.yml
+global:
+  scrape_interval: 15s # Fréquence de collecte
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090'] # Monitoring de Prometheus lui-même
+
+  - job_name: 'api_monitor'
+    static_configs:
+      - targets: ['monitor:5000'] # Service 'monitor' (l'API)
+        # Prometheus utilisera http://monitor:5000/metrics (nom de conteneur + port exposé)

@@ -1,0 +1,90 @@
+
+services:
+  # 1. API Service (monitor)
+  api:
+    build: ./api
+    container_name: tp_api
+    # Exposition via NGINX seulement
+    ports: []
+    environment:
+      - DB_HOST=db
+      - DB_NAME=tp_db
+      - DB_USER=user_app
+      - DB_PASSWORD=secret_password
+    volumes:
+      - logs_vol:/app/logs:rw # Pour que NGINX et le monitor puissent lire les logs de l'API
+    # Connecté aux deux réseaux pour parler à NGINX et à la DB
+    networks:
+      - frontend
+      - backend
+    # Bonus : Healthcheck et Restart Policy
+   # healthcheck:
+    #  test: ["CMD", "curl", "--fail", "http://localhost:5000/health"]
+     # interval: 15s
+     # timeout: 5s
+      #retries: 5
+     # start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy # Utiliser 'healthy' si DB a un healthcheck, sinon 'service_started'
+
+  # 2. Database Service
+  db:
+    image: postgres:15-alpine
+    container_name: tp_db
+    ports: [] # CRITIQUE : NE PAS exposer le port 5432
+    networks:
+      - backend
+    volumes:
+      - db_data:/var/lib/postgresql/data # Persistance (Contrainte)
+    environment:
+      - POSTGRES_DB=tp_db
+      - POSTGRES_USER=user_app
+      - POSTGRES_PASSWORD=secret_password
+    healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U user_app"] # Commande standard Postgres
+        interval: 10s
+        timeout: 5s
+        retries: 5
+    restart: unless-stopped
+    # Pas de healthcheck PostgreSQL ici pour simplicité, utiliser 'service_started' dans depends_on
+
+  # 3. Reverse Proxy (NGINX)
+  reverse:
+    image: nginx:stable-alpine
+    container_name: tp_reverse
+    # CRITIQUE : Exposition sur le port 8080 (Contrainte)
+    ports:
+      - "8080:80"
+    networks:
+      - frontend
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - logs_vol:/var/log/nginx:ro # Lecture des logs de NGINX par le service monitor
+    depends_on:
+      api:
+        condition: service_started # Attendre que l'API soit considérée 'healthy'
+
+  # 4. Monitoring Service
+  monitor:
+    build: ./monitor
+    container_name: tp_monitor
+    # Lecture du volume partagé (Contrainte)
+    command: python log_analyzer.py
+    volumes:
+      - logs_vol:/app/logs:ro
+    # N'a pas besoin d'être sur un réseau
+    restart: unless-stopped
+
+# Définition des réseaux (CRITIQUE : Isolation du backend)
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+# Déclaration des volumes
+volumes:
+  db_data: # Pour la persistance DB (Mission 3)
+  logs_vol: # Pour le partage des logs (Mission 5)
